@@ -1,0 +1,169 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no">
+<title>Free Zone 3 V3</title>
+<style>
+*{box-sizing:border-box;-webkit-tap-highlight-color:transparent}
+html,body{margin:0;width:100%;height:100%;overflow:hidden;background:#0b1020;color:#fff;font-family:Arial,sans-serif}
+.screen{position:absolute;inset:0;display:flex;align-items:center;justify-content:center}
+.hidden{display:none!important}
+.card{width:min(92vw,450px);padding:24px;border:1px solid #ffffff2b;border-radius:24px;background:#111827f2;box-shadow:0 20px 70px #0008;text-align:center}
+h1{font-size:40px;margin:0 0 5px} h2{margin-top:0}
+.sub{color:#aab6d5}
+button{border:0;border-radius:14px;padding:14px 18px;margin:6px;background:#24324f;color:#fff;font-weight:700;min-width:145px}
+button.primary{background:#e83b4f} button:active{transform:scale(.97)}
+input{width:100%;padding:14px;border-radius:12px;border:1px solid #ffffff25;background:#080d18;color:#fff;outline:0;margin:6px 0}
+.small{font-size:12px;color:#9ba8c4;line-height:1.45}
+.code{font-size:28px;letter-spacing:5px;font-weight:900;padding:12px;border-radius:12px;background:#080d18;margin:10px}
+#game{background:#162318}
+canvas{position:absolute;inset:0;width:100%;height:100%;touch-action:none}
+#hud{position:absolute;inset:0;pointer-events:none}
+.hudbox{position:absolute;background:#07101dcc;border:1px solid #ffffff20;border-radius:12px;padding:8px 11px;font-size:13px}
+#stats{left:10px;top:10px} #board{right:10px;top:10px;text-align:left;min-width:155px}
+#roomHud{right:10px;top:145px}
+#message{left:50%;top:12%;transform:translateX(-50%);font-weight:800;background:#000b;padding:10px 15px;border-radius:12px;opacity:0;transition:.2s}
+#powers{left:50%;bottom:16px;transform:translateX(-50%);display:flex;gap:7px;pointer-events:auto;flex-wrap:wrap;justify-content:center}
+.power{min-width:82px;margin:0;padding:10px 7px;font-size:11px}
+#back{position:absolute;right:10px;bottom:16px;min-width:auto;padding:11px;pointer-events:auto}
+#stick{position:absolute;left:22px;bottom:24px;width:120px;height:120px;border-radius:50%;background:#ffffff16;border:2px solid #ffffff22;pointer-events:auto}
+#knob{position:absolute;left:50%;top:50%;width:48px;height:48px;margin:-24px;border-radius:50%;background:#ffffff44}
+#shoot{position:absolute;right:25px;bottom:35px;width:82px;height:82px;border-radius:50%;background:#e83b4fcc;border:3px solid #fff8;pointer-events:auto}
+</style>
+</head>
+<body>
+<div id="menu" class="screen">
+ <div class="card">
+  <h1>FREE ZONE 3</h1><p class="sub">V3 • multijugador</p>
+  <button class="primary" onclick="host()">👑 Crear sala</button>
+  <button onclick="showJoin()">👤 Unirse a sala</button>
+  <div id="joinBox" class="hidden">
+   <input id="joinCode" maxlength="6" placeholder="Código de sala">
+   <button onclick="join()">Entrar</button>
+  </div>
+  <div id="roomBox" class="hidden">
+   <p>Comparte este código con tu hermano:</p>
+   <div id="roomCode" class="code">------</div>
+   <p id="wait" class="small">Esperando al segundo jugador…</p>
+  </div>
+  <p id="status" class="small">V3 usa conexión directa entre navegadores para probar el multijugador.</p>
+ </div>
+</div>
+
+<div id="game" class="screen hidden">
+ <canvas id="c"></canvas>
+ <div id="hud">
+  <div id="stats" class="hudbox"></div>
+  <div id="board" class="hudbox"></div>
+  <div id="roomHud" class="hudbox"></div>
+  <div id="message"></div>
+  <div id="powers">
+   <button class="power" onclick="usePower('tele')">📡 Teleport</button>
+   <button class="power" onclick="usePower('fly')">🪽 Volar</button>
+   <button class="power" onclick="usePower('vision')">🕶️ Visión</button>
+   <button class="power" onclick="usePower('wall')">🧱 Paredes</button>
+   <button class="power" onclick="usePower('speed')">⚡ Velocidad</button>
+   <button class="power" id="invisBtn" onclick="usePower('invis')">🫥 Invisible</button>
+  </div>
+  <button id="back" onclick="leave()">Salir</button>
+ </div>
+ <div id="stick"><div id="knob"></div></div>
+ <button id="shoot">🔥</button>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.4/dist/peerjs.min.js"></script>
+<script>
+const c=document.getElementById('c'),ctx=c.getContext('2d'); let W,H;
+function resize(){W=c.width=innerWidth*devicePixelRatio;H=c.height=innerHeight*devicePixelRatio;c.style.width=innerWidth+'px';c.style.height=innerHeight+'px';ctx.setTransform(devicePixelRatio,0,0,devicePixelRatio,0,0)} addEventListener('resize',resize);resize();
+
+let peer=null,conn=null,isHost=false,role=null,room='',running=false,last=0,shooting=false;
+const world={w:2600,h:1800}; let player,other,bots=[],walls=[],keys={},joy={x:0,y:0,active:false},cooldowns={};
+
+function code(){return Math.random().toString(36).slice(2,8).toUpperCase()}
+function setStatus(s){document.getElementById('status').textContent=s}
+function showJoin(){document.getElementById('joinBox').classList.remove('hidden');setStatus('Escribe el código que te dio el Creador.')}
+function host(){
+ role='creator';isHost=true;room=code();document.getElementById('menu').classList.add('hidden');document.getElementById('roomBox').classList.remove('hidden');document.getElementById('roomCode').textContent=room;
+ peer=new Peer('FZ3-'+room);
+ peer.on('open',()=>setStatus('Sala creada. Esperando a tu hermano…'));
+ peer.on('connection',c=>{conn=c;wire();document.getElementById('wait').textContent='✅ Segundo jugador conectado.';setTimeout(startGame,600)});
+ peer.on('error',e=>setStatus('Error de conexión: '+e.type));
+}
+function join(){
+ role='brother';isHost=false;room=(document.getElementById('joinCode').value||'').trim().toUpperCase();
+ if(!/^[A-Z0-9]{6}$/.test(room)){setStatus('Código inválido: debe tener 6 caracteres.');return}
+ document.getElementById('menu').classList.add('hidden');setStatus('Conectando…');
+ peer=new Peer();
+ peer.on('open',()=>{conn=peer.connect('FZ3-'+room,{reliable:true});wire();conn.on('open',()=>startGame())});
+ peer.on('error',e=>{document.getElementById('menu').classList.remove('hidden');setStatus('No se pudo conectar. Comprueba el código y que la sala siga abierta.')});
+}
+function wire(){
+ if(!conn)return;
+ conn.on('open',()=>{if(!running)setStatus('Conectado.')});
+ conn.on('data',data=>{
+   if(data.type==='state') other=data.player;
+   if(data.type==='hit'&&isHost){const b=bots[data.index];if(b&&b.alive){b.hp-=35;if(b.hp<=0)b.alive=false}}
+   if(data.type==='start'&&!running)startGame();
+ });
+}
+function startGame(){
+ document.getElementById('roomBox').classList.add('hidden');document.getElementById('joinBox').classList.add('hidden');document.getElementById('game').classList.remove('hidden');
+ player={x:isHost?world.w/2:world.w/2+80,y:world.h/2,hp:200,maxHp:200,rank:'Bronce',level:1,wins:0,stars:0,diamonds:0,name:isHost?'CREADOR 👑':'HERMANO 🫥',invis:0};
+ other={x:world.w/2,y:world.h/2,hp:200,name:isHost?'HERMANO 🫥':'CREADOR 👑'};
+ if(isHost){
+  bots=[];const names=['Rayo','Sombra','Ninja','Fénix','Tigre','Lobo','Nova','Ghost'];
+  for(let i=0;i<8;i++)bots.push({name:names[i],x:250+Math.random()*2100,y:200+Math.random()*1400,hp:200,maxHp:200,alive:true,dx:0,dy:0});
+  walls=[];for(let i=0;i<15;i++)walls.push({x:150+Math.random()*2200,y:120+Math.random()*1500,w:70+Math.random()*130,h:30+Math.random()*75});
+  conn?.send({type:'start'});
+ }
+ running=true;last=performance.now();toast(isHost?'🎮 Sala iniciada':'👥 ¡Entraste a la sala!');requestAnimationFrame(loop);
+}
+function leave(){running=false;conn?.close();peer?.destroy();document.getElementById('game').classList.add('hidden');document.getElementById('menu').classList.remove('hidden');document.getElementById('roomBox').classList.add('hidden');document.getElementById('joinBox').classList.add('hidden');setStatus('Sala cerrada.')}
+function usePower(p){
+ const t=performance.now();if(cooldowns[p]&&t<cooldowns[p])return;
+ if(role==='creator'&&p==='tele'){player.x=150+Math.random()*2300;player.y=120+Math.random()*1500;cooldowns[p]=t+4000}
+ else if(role==='creator'&&p==='fly'){player.fly=t+7000;cooldowns[p]=t+12000}
+ else if(role==='creator'&&p==='vision'){player.vision=t+7000;cooldowns[p]=t+15000}
+ else if(role==='creator'&&p==='wall'){player.wall=t+7000;cooldowns[p]=t+12000}
+ else if(role==='creator'&&p==='speed'){player.speed=t+7000;cooldowns[p]=t+10000}
+ else if(role==='brother'&&p==='invis'){player.invis=t+40000;cooldowns[p]=t+60000}
+}
+const stick=document.getElementById('stick'),knob=document.getElementById('knob');
+function joyMove(e){let r=stick.getBoundingClientRect(),p=e.touches?e.touches[0]:e,x=p.clientX-(r.left+r.width/2),y=p.clientY-(r.top+r.height/2),m=Math.hypot(x,y),max=48;if(m>max){x=x/m*max;y=y/m*max}joy.x=x/max;joy.y=y/max;knob.style.transform=`translate(${x}px,${y}px)`}
+stick.addEventListener('pointerdown',e=>{joy.active=true;stick.setPointerCapture(e.pointerId);joyMove(e)});stick.addEventListener('pointermove',e=>{if(joy.active)joyMove(e)});stick.addEventListener('pointerup',()=>{joy.active=false;joy.x=joy.y=0;knob.style.transform=''});
+addEventListener('keydown',e=>keys[e.key.toLowerCase()]=true);addEventListener('keyup',e=>keys[e.key.toLowerCase()]=false);
+document.getElementById('shoot').addEventListener('pointerdown',()=>shooting=true);document.getElementById('shoot').addEventListener('pointerup',()=>shooting=false);
+
+function blocked(x,y){if(role==='creator'&&performance.now()<player.wall)return false;return walls.some(w=>x>w.x-14&&x<w.x+w.w+14&&y>w.y-14&&y<w.y+w.h+14)}
+function nearest(){let b=null,d0=Infinity;for(let i=0;i<bots.length;i++){let b0=bots[i];if(!b0.alive)continue;let d=Math.hypot(b0.x-player.x,b0.y-player.y);if(d<d0){d0=d;b={...b0,index:i}}}return b}
+function shoot(){
+ if(!isHost){let b=nearest();if(b)conn?.send({type:'hit',index:b.index});return}
+ let b=nearest();if(!b)return;let d=Math.hypot(b.x-player.x,b.y-player.y);if(d>650)return;bots[b.index].hp-=role==='creator'?80:35;if(bots[b.index].hp<=0){bots[b.index].alive=false;player.wins++;player.level++}
+}
+function loop(t){if(!running)return;let dt=Math.min(.035,(t-last)/1000);last=t;update(dt,t);draw(t);requestAnimationFrame(loop)}
+function update(dt,t){
+ let sx=joy.x||((keys.d?1:0)-(keys.a?1:0)),sy=joy.y||((keys.s?1:0)-(keys.w?1:0)),sp=role==='creator'&&t<player.speed?520:250;
+ let nx=player.x+sx*sp*dt,ny=player.y+sy*sp*dt;if(!blocked(nx,player.y))player.x=Math.max(30,Math.min(world.w-30,nx));if(!blocked(player.x,ny))player.y=Math.max(30,Math.min(world.h-30,ny));
+ if(shooting&&t-(player.lastShot||0)>260){shoot();player.lastShot=t}
+ if(isHost)for(const b of bots)if(b.alive){let d=Math.hypot(player.x-b.x,player.y-b.y),a=d<520?Math.atan2(player.y-b.y,player.x-b.x):Math.random()*6.28;b.x+=Math.cos(a)*80*dt;b.y+=Math.sin(a)*80*dt}
+ if(conn?.open)conn.send({type:'state',player:{x:player.x,y:player.y,hp:player.hp,name:player.name,invis:player.invis}});
+}
+function draw(t){
+ ctx.clearRect(0,0,innerWidth,innerHeight);let camX=Math.max(0,Math.min(world.w-innerWidth,player.x-innerWidth/2)),camY=Math.max(0,Math.min(world.h-innerHeight,player.y-innerHeight/2));ctx.save();ctx.translate(-camX,-camY);
+ ctx.fillStyle='#1c4a2a';ctx.fillRect(0,0,world.w,world.h);ctx.strokeStyle='#2c7040';for(let x=0;x<world.w;x+=80){ctx.beginPath();ctx.moveTo(x,0);ctx.lineTo(x,world.h);ctx.stroke()}for(let y=0;y<world.h;y+=80){ctx.beginPath();ctx.moveTo(0,y);ctx.lineTo(world.w,y);ctx.stroke()}
+ for(const w of walls){ctx.fillStyle='#39465a';ctx.fillRect(w.x,w.y,w.w,w.h)}
+ if(isHost)for(const b of bots)if(b.alive){ctx.fillStyle='#f4b942';ctx.beginPath();ctx.arc(b.x,b.y,17,0,6.28);ctx.fill();ctx.fillStyle='#fff';ctx.font='12px Arial';ctx.textAlign='center';ctx.fillText(b.name,b.x,b.y-24)}
+ const otherHidden=other&&other.invis&&performance.now()<other.invis;
+ if(!otherHidden&&other){ctx.fillStyle='#9c7cff';ctx.beginPath();ctx.arc(other.x,other.y,20,0,6.28);ctx.fill();ctx.fillStyle='#fff';ctx.font='12px Arial';ctx.textAlign='center';ctx.fillText(other.name,other.x,other.y-28)}
+ if(!(role==='brother'&&performance.now()<player.invis)){ctx.fillStyle='#54a9ff';ctx.beginPath();ctx.arc(player.x,player.y,20,0,6.28);ctx.fill();ctx.fillStyle='#fff';ctx.font='12px Arial';ctx.textAlign='center';ctx.fillText(player.name,player.x,player.y-28)}
+ ctx.restore();
+ document.getElementById('stats').innerHTML=`${player.name}<br>❤️ ${Math.ceil(player.hp)}/200<br>🥉 Bronce • Nv.${player.level}<br>🏆 ${player.wins}`;
+ document.getElementById('board').innerHTML=`🏆 LÍDER BOARD<br>1. ${player.name}<br>2. ${other?.name||'Esperando…'}<br>🤖 ${isHost?bots.filter(b=>b.alive).length:8} bots`;
+ document.getElementById('roomHud').innerHTML=`🔐 Sala: <b>${room}</b><br>${conn?.open?'🟢 Conectados':'🟡 Conectando'}`;
+ document.getElementById('invisBtn').style.display=role==='brother'?'block':'none';
+}
+let timer;function toast(s){const m=document.getElementById('message');m.textContent=s;m.style.opacity=1;clearTimeout(timer);timer=setTimeout(()=>m.style.opacity=0,1800)}
+</script>
+</body>
+</html>
